@@ -14,7 +14,7 @@ pub mod pms;
 pub mod server;
 
 use gdm::GDM_PORT;
-use identity::{Player, HTTP_PORT};
+use identity::{HTTP_PORT, Player};
 
 struct Options {
     name: String,

@@ -30,9 +30,9 @@
         let
           pkgs = import nixpkgs { inherit system; };
         in {
-          # alsa-lib is split outputs: the `dev` output carries include/ and
-          # lib/pkgconfig/alsa.pc, while plain alsa-lib is the runtime-only
-          # `out` output (libasound.so). alsa-sys needs both via pkg-config.
+          
+          
+          
           default = pkgs.mkShell {
             packages = [
               pkgs.cargo

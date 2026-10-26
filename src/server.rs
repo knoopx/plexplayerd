@@ -1,6 +1,6 @@
 use std::sync::{Arc, Mutex};
 
-use crate::identity::{Player, HTTP_PORT};
+use crate::identity::{HTTP_PORT, Player};
 use crate::playback::Playback;
 use crate::pms::{self, QueueTrack};
 use tracing::{info, warn};
@@ -103,8 +103,7 @@ fn route(
         "/player/playback/skipTo" => {
             let params = parse_query(&query);
             let key = params.get("key").cloned().unwrap_or_default();
-            // Reference: `playQueue.skipToKey(key, playQueueItemID)` — the
-            // item id is the fallback when `key` is absent.
+
             let target = if key.is_empty() {
                 params.get("playQueueItemID").cloned().unwrap_or_default()
             } else {
@@ -162,7 +161,7 @@ fn route(
         }
         "/player/timeline/poll" => {
             let params = parse_query(&query);
-            // Reference rule: a poll without a commandID is a 400.
+
             let Some(command_id) = params.get("commandID").cloned() else {
                 return (400, String::new(), vec![]);
             };
@@ -172,9 +171,7 @@ fn route(
                 vec![("Content-Type".into(), "text/xml".into())],
             )
         }
-        // Push-subscription endpoints: plexplayerd is poll-only, so these
-        // acknowledge with 200 and do nothing (the reference pushes updates
-        // to subscribers; a 404 here would make clients fall back badly).
+
         "/player/timeline/subscribe" | "/player/timeline/unsubscribe" => {
             (200, String::new(), vec![])
         }
@@ -203,13 +200,7 @@ fn handle_play_media(query: &str, player: &Player, playback: &Arc<Mutex<Playback
         .map(|s| s.split('?').next().unwrap_or("").to_string())
         .unwrap_or_default();
     let machine_id = get("machineIdentifier");
-    // Connection fields (module-29316 TimelineController.createOptions): the
-    // client derives protocol/address/port from the server device's connection
-    // URI (`parse(uri)`; protocol with the trailing ':' stripped, address =
-    // hostname, port = port || (https ? 443 : 80)) and sends them on playMedia,
-    // so the player must reconstruct `protocol://address:port` as the server
-    // base URL for its fetches. When `address` is absent, fall back to the
-    // $PLEX_SERVER env (default http://127.0.0.1:32400).
+
     let protocol = get("protocol");
     let address = get("address");
     let port = get("port");
@@ -221,19 +212,14 @@ fn handle_play_media(query: &str, player: &Player, playback: &Arc<Mutex<Playback
         } else {
             protocol.as_str()
         };
-        // Plex's default server port when the connection field is absent.
+
         if port.is_empty() {
             format!("{proto}://{address}:32400")
         } else {
             format!("{proto}://{address}:{port}")
         }
     };
-    // plex.direct relay decode. Reference: ~/Projects/archive/plexamp-gtkx/plexamp-deobfuscated/split/module-37987.js
-    // — the Connection class's `cloneAsHttp` replaces `https://` with `http://`,
-    // and when the prefer-direct flag is set applies
-    // `.replace(/([0-9-]+).[a-f0-9]+.plex.direct/, '$1').replace(/-/g, '.')`:
-    // the plex.direct relay hostname `<dash-ip>.<hash>.plex.direct` becomes the
-    // direct dotted-IP address, and the protocol downgrades https→http.
+
     if address.ends_with(".plex.direct") {
         let first = address.split('.').next().unwrap_or("");
         let is_dash_ipv4 =
@@ -257,10 +243,7 @@ fn handle_play_media(query: &str, player: &Player, playback: &Arc<Mutex<Playback
     } else {
         Vec::new()
     };
-    // A playMedia may carry only the play queue (`containerKey`) with no
-    // `key` — Plexamp then expects the player to start from the queue's first
-    // item. When a `key` IS given, make sure it's in the playlist (resolving a
-    // single media item if it isn't).
+
     let start_key = if key.is_empty() {
         playlist.first().map(|t| t.key.clone()).unwrap_or_default()
     } else {
@@ -308,16 +291,6 @@ fn handle_play_media(query: &str, player: &Player, playback: &Arc<Mutex<Playback
     }
 }
 
-/// Handle a `createPlayQueue` command. Plexamp sends this (instead of
-/// `playMedia`) when there is no existing `containerKey` and the player
-/// advertises `playqueues-creation`. The command's query string carries the
-/// item fields; Plexamp expects the player to create the play queue itself.
-///
-/// Grounded in `computePlayKey` (split/module-16785.js): the player POSTs the
-/// item fields to the PMS `/playQueues?<fields>` (with the player headers),
-/// gets back a `<MediaContainer playQueueID="..." size="...">` with
-/// `Metadata` children, and plays the first track. Plexamp only checks the
-/// response status (< 400).
 fn handle_create_play_queue(
     query: &str,
     player: &Player,
@@ -357,8 +330,7 @@ fn handle_create_play_queue(
         }
     };
     info!("createPlayQueue: source={machine_id} base={base}");
-    // Replicate `computePlayKey`: POST the item fields to the PMS /playQueues
-    // to create the queue.
+
     let url = format!("{base}/playQueues?{query}&X-Plex-Token={token}");
     let Some((status, body)) = pms::http_post(&url, player) else {
         warn!("createPlayQueue: POST to PMS failed for {url}");
@@ -380,7 +352,7 @@ fn handle_create_play_queue(
         return (status, body);
     }
     info!("createPlayQueue: created playQueueID={play_queue_id}");
-    // Fetch the queue and play the first track.
+
     let playlist = pms::fetch_play_queue(&base, player, &play_queue_id, &token).unwrap_or_default();
     if let Some(first) = playlist.first() {
         let first_key = first.key.clone();

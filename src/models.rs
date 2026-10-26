@@ -1,14 +1,8 @@
 use serde::{Deserialize, Serialize};
 
-// ── Plex XML data records: deserialized from server responses ────────────
-// (attribute fields use the serde-xml-rs 0.8 "@name" rename convention)
-
 #[derive(Debug, Deserialize)]
 #[serde(rename = "MediaContainer")]
 pub struct PlexContainer {
-    // Current PMS shape (captured /playQueues and /library/metadata
-    // responses are flat): <Track> elements sit directly under
-    // <MediaContainer>, with no <QueueItem> or <Meta> wrapper.
     #[serde(rename = "Track", default)]
     pub track: Vec<PlexTrack>,
     #[serde(rename = "Meta", default)]
@@ -92,22 +86,9 @@ pub struct PlexPart {
 }
 
 impl PlexTrack {
-    /// Resolve this track to a local file path or a PMS stream URL.
-    ///
-    /// For each part: if `Part@file` (or `Part@key` when `file` is empty)
-    /// exists as a LOCAL path on the player machine -> `Some(path)`; otherwise,
-    /// if `Part@key` is present -> a PMS stream URL (`base + key`; the token
-    /// goes in the request header, not the URL). A track with neither a local
-    /// part nor a part key is dropped (`None`).
-    ///
-    /// Grounded in module-26775 (`parts` = `t.Part || t.parts`) and the
-    /// reference player, which streams parts over HTTP and never reads the
-    /// server's disk paths (`Part@file` is a path on the PMS host, not the
-    /// player machine).
     pub fn resolve(&self, base: &str) -> Option<(Option<String>, Option<String>)> {
         for media in &self.media {
             for part in &media.parts {
-                // Local candidate: Part@file, falling back to Part@key.
                 let local_raw = if part.file.is_empty() {
                     &part.key
                 } else {
@@ -117,7 +98,7 @@ impl PlexTrack {
                 if !local.is_empty() && std::path::Path::new(&local).exists() {
                     return Some((Some(local), None));
                 }
-                // Remote: stream the part over HTTP from the PMS.
+
                 if !part.key.is_empty() {
                     let key = if part.key.starts_with('/') {
                         part.key.clone()
@@ -132,9 +113,6 @@ impl PlexTrack {
         None
     }
 
-    /// The audio container/codec/bitrate from the first part, for the
-    /// timeline's codec display. Container falls back to the part file
-    /// extension; codec falls back to the part's audioCodec.
     pub fn media_info(&self) -> (String, String, u32) {
         let Some(part) = self.media.iter().find_map(|m| m.parts.first()) else {
             return (String::new(), String::new(), 0);
@@ -149,12 +127,10 @@ impl PlexTrack {
         } else {
             part.codec.clone()
         };
-        // Plex Part @bitrate is in kbps; the timeline expects bps.
+
         (container, codec, part.bitrate * 1000)
     }
 }
-
-// ── Plex XML data records: serialized to the server ───────────────────────
 
 #[derive(Serialize)]
 #[serde(rename = "MediaContainer")]
@@ -474,10 +450,6 @@ mod xml_records_test {
 
     #[test]
     fn deserialize_flat_play_queue() {
-        // Compact FLAT queue shape matching the captured /tmp/queue917.xml:
-        // <Track> elements sit directly under <MediaContainer> (no
-        // <QueueItem> wrapper). The second part is a PMS-only part (no local
-        // file on the player), so it must resolve to a stream URL.
         let xml = r#"<MediaContainer size="2" playQueueID="917"><Track type="track" title="The Thread" grandparentTitle="Lysistrata" key="/library/metadata/530889" duration="186331"><Media id="462842" container="mp3"><Part id="462842" key="/library/parts/462842/1567618582/file.mp3" file="/mnt/music/x.mp3" container="mp3" duration="186331"/></Media></Track><Track type="track" title="Remote Track" grandparentTitle="Remote Artist" key="/library/metadata/762232" duration="370259"><Media id="666282" container="mp3"><Part id="666282" key="/library/parts/462842/1567618582/file.mp3" container="mp3" duration="370259"/></Media></Track></MediaContainer>"#;
         let c: PlexContainer = serde_xml_rs::from_str(xml).unwrap();
         assert_eq!(c.track.len(), 2);
@@ -494,9 +466,6 @@ mod xml_records_test {
 
     #[test]
     fn deserialize_flat_metadata() {
-        // Compact FLAT metadata shape matching the captured
-        // /tmp/meta762232.xml: a <Track> directly under <MediaContainer> (no
-        // <Meta> wrapper), with a PMS part key (not a local path).
         let xml = r#"<MediaContainer size="1" allowSync="1"><Track type="track" title="Grab It From the Garden" grandparentTitle="ovlov" key="/library/metadata/762232" duration="370259"><Media id="666282" container="mp3"><Part id="666282" key="/library/parts/666282/1779752979/file.mp3" container="mp3" duration="370259"/></Media></Track></MediaContainer>"#;
         let c: PlexContainer = serde_xml_rs::from_str(xml).unwrap();
         assert_eq!(c.track.len(), 1);

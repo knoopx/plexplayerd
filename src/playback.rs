@@ -1,6 +1,6 @@
 use crate::identity::Player;
 use crate::models::{MediaXml, PartXml, TimelineContainer, TimelineXml, TrackXml};
-use crate::pms::{fetch_play_queue, QueueTrack};
+use crate::pms::{QueueTrack, fetch_play_queue};
 use anyhow::Result;
 use tracing::{debug, info, warn};
 
@@ -58,8 +58,6 @@ impl Playback {
         }
     }
 
-    // The flat parameter list mirrors the Plex playMedia command params
-    // 1:1; the extra arg is not worth a config struct at this call depth.
     #[allow(clippy::too_many_arguments)]
     pub fn start(
         &mut self,
@@ -75,7 +73,7 @@ impl Playback {
         product: &str,
         version: &str,
     ) -> Result<()> {
-        self.player = None; // drop previous engine (closes ALSA)
+        self.player = None;
         let player = crate::player::Player::spawn(
             &alsa_device(),
             self.gain.clone(),
@@ -124,15 +122,10 @@ impl Playback {
         self.state = "stopped".into();
     }
 
-    /// Remember the queue id (from `refreshPlayQueue?playQueueID=`).
     pub fn set_play_queue_id(&mut self, id: &str) {
         self.play_queue_id = id.to_string();
     }
 
-    /// Re-fetch the play queue from the server and update the playlist,
-    /// keeping the current track's position (reference:
-    /// `refreshPlayQueueHereAndBelow`). A fetch failure keeps the old
-    /// playlist.
     pub fn refresh_queue(&mut self, player: &Player) {
         if self.play_queue_id.is_empty() || self.token.is_empty() {
             return;
@@ -166,8 +159,6 @@ impl Playback {
         self.playlist = ordered;
     }
 
-    /// Jump to the first later track with a different artist (wrapping);
-    /// reference `skipToNextAlbum`.
     pub fn skip_to_next_album(&mut self) {
         if self.playlist.len() < 2 {
             return;
@@ -223,7 +214,6 @@ impl Playback {
 
     pub fn prev_track(&mut self, force: bool) {
         if force {
-            // Restart the current track from the beginning.
             let Some(t) = self.playlist.iter().find(|t| t.key == self.track_key) else {
                 return;
             };
@@ -243,8 +233,6 @@ impl Playback {
         }
     }
 
-    /// Manual skip (next/previous): step `dir` from the current track,
-    /// wrapping around the playlist.
     pub fn advance_manual(&mut self, dir: i32) {
         if self.playlist.is_empty() {
             return;
@@ -259,10 +247,8 @@ impl Playback {
         self.play_index(next);
     }
 
-    /// The current track reached end-of-stream: advance per repeat/shuffle.
     pub fn complete_current(&mut self) {
         if self.repeat == 2 {
-            // repeat-one: replay the current track.
             let Some(t) = self.playlist.iter().find(|t| t.key == self.track_key) else {
                 return;
             };
@@ -282,7 +268,6 @@ impl Playback {
             .unwrap_or(0);
         let len = self.playlist.len();
         if self.shuffle == 1 {
-            // xorshift64: pick a random OTHER index (never the current one).
             let mut x = self.rng;
             x ^= x << 13;
             x ^= x >> 7;
@@ -302,15 +287,13 @@ impl Playback {
         let mut next = cur + 1;
         if next >= len {
             if self.repeat != 1 {
-                // End of playlist without repeat-all: stop (the playlist,
-                // play_queue_id, and token are kept).
                 self.player = None;
                 self.track_key.clear();
                 self.media_path.clear();
                 self.state = "stopped".into();
                 return;
             }
-            next = 0; // repeat-all: wrap to the first track
+            next = 0;
         }
         self.play_index(next);
     }
@@ -370,8 +353,7 @@ impl Playback {
         let title = self.title.clone();
         let artist = self.artist.clone();
         let media_path = self.media_path.clone();
-        // The current track's audio format + artwork, threaded from the Plex
-        // Part metadata (container/codec/bitrate) and the track's @thumb.
+
         let current = self.playlist.iter().find(|t| t.key == self.track_key);
         let track_container = current.map(|t| t.container.clone()).unwrap_or_default();
         let track_codec = current.map(|t| t.codec.clone()).unwrap_or_default();
@@ -382,9 +364,7 @@ impl Playback {
         let track_view_count = current.map(|t| t.view_count).unwrap_or(0);
         let track_rating_key = current.map(|t| t.rating_key.clone()).unwrap_or_default();
         let tl_codec = track_codec.clone();
-        // <Timeline @container> is the AUDIO container (e.g. "mp3"), not the
-        // play-queue URI (that is @containerKey) — Plexamp's codec-name
-        // fallback reads @container.
+
         let tl_container = track_container.clone();
         let machine_id = if self.machine_identifier.is_empty() {
             player.device_id.as_str()
@@ -392,9 +372,7 @@ impl Playback {
             self.machine_identifier.as_str()
         };
         let timeline_key = track_key.clone();
-        // Plexamp links the timeline to the play-queue item (full metadata:
-        // artwork, rating) by playQueueItemID, so emit the real id (fall back
-        // to the track key only when the queue item carried none).
+
         let play_queue_item_id = current
             .map(|t| t.play_queue_item_id.clone())
             .filter(|s| !s.is_empty())
